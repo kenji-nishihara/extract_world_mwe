@@ -420,6 +420,52 @@ def best_color_to_category_mapping(color_values_2050: dict[tuple[float, ...], fl
     return mapping
 
 
+
+
+def merge_color_mappings(
+    legend_map: dict[tuple[float, ...], str],
+    fallback_map: dict[tuple[float, ...], str],
+    observed_colors: list[tuple[float, ...]],
+) -> dict[tuple[float, ...], str]:
+    """Combine legend/fallback mappings to improve recall.
+
+    Strategy:
+    - keep legend assignments first (higher semantic trust),
+    - then fill still-unmapped observed colors from fallback.
+    """
+    merged = dict(legend_map)
+    for color in observed_colors:
+        if resolve_category_by_color(color, merged) is not None:
+            continue
+        cat = resolve_category_by_color(color, fallback_map)
+        if cat:
+            merged[color] = cat
+    return merged
+
+
+def choose_color_mapping(
+    legend_map: dict[tuple[float, ...], str],
+    fallback_map: dict[tuple[float, ...], str],
+    year_color_values: dict[tuple[float, ...], float],
+    table_values: list[float] | None,
+) -> dict[tuple[float, ...], str]:
+    """Pick best mapping among legend/fallback/merged by table consistency."""
+    observed_colors = list(year_color_values.keys())
+    merged_map = merge_color_mappings(legend_map, fallback_map, observed_colors)
+
+    if table_values is None:
+        # no table: prefer richer mapping
+        candidates = [legend_map, merged_map, fallback_map]
+        return max(candidates, key=lambda m: len(m))
+
+    scored = [
+        (mapping_cost_vs_table(legend_map, year_color_values, table_values), legend_map),
+        (mapping_cost_vs_table(fallback_map, year_color_values, table_values), fallback_map),
+        (mapping_cost_vs_table(merged_map, year_color_values, table_values), merged_map),
+    ]
+    scored.sort(key=lambda x: x[0])
+    return scored[0][1]
+
 def mapping_cost_vs_table(
     mapping: dict[tuple[float, ...], str],
     year_color_values: dict[tuple[float, ...], float],
@@ -495,14 +541,14 @@ def extract_page_timeseries(page: dict) -> list[dict[str, str]]:
         by_year_color[nearest_year][col] = by_year_color[nearest_year].get(col, 0.0) + mwe
 
     legend_map = parse_legend_color_map(words, rects)
-    color_to_category = legend_map
-    if table_nums is not None:
-        yr2050 = 2050 if 2050 in by_year_color else max(by_year_color)
-        fallback_map = best_color_to_category_mapping(by_year_color[yr2050], table_nums)
-        legend_cost = mapping_cost_vs_table(legend_map, by_year_color[yr2050], table_nums)
-        fallback_cost = mapping_cost_vs_table(fallback_map, by_year_color[yr2050], table_nums)
-        if fallback_cost < legend_cost:
-            color_to_category = fallback_map
+    yr2050 = 2050 if 2050 in by_year_color else max(by_year_color)
+    fallback_map = best_color_to_category_mapping(by_year_color[yr2050], table_nums or [0.0] * 8)
+    color_to_category = choose_color_mapping(
+        legend_map=legend_map,
+        fallback_map=fallback_map,
+        year_color_values=by_year_color[yr2050],
+        table_values=table_nums,
+    )
 
     if not color_to_category:
         return []
@@ -606,6 +652,7 @@ def main() -> None:
     parser.add_argument("-s", "--series", "-series", dest="series")
     parser.add_argument("-y", "--year-min", "-year-min", dest="year_min", type=int, default=2025)
     parser.add_argument("-Y", "--year-max", "-year-max", dest="year_max", type=int, default=2050)
+    parser.add_argument("--debug-country", default=None, help="Print mapping diagnostics for the specified country")
     args = parser.parse_args()
 
     if not args.pdf.exists():
@@ -617,6 +664,15 @@ def main() -> None:
         rows.extend(extract_page_timeseries(page))
 
     rows = [r for r in rows if args.year_min <= int(r["year"]) <= args.year_max]
+    if args.debug_country:
+        drows = [r for r in rows if r["country"].lower() == args.debug_country.lower()]
+        if drows:
+            by_cat = defaultdict(float)
+            for r in drows:
+                by_cat[r["category"]] += float(r["mwe"])
+            print(f"[DEBUG] country={args.debug_country} rows={len(drows)} totals_by_category={dict(by_cat)}")
+        else:
+            print(f"[DEBUG] country={args.debug_country} no rows extracted")
     if args.country:
         rows = [r for r in rows if r["country"].lower() == args.country.lower()]
 

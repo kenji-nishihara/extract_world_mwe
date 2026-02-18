@@ -80,3 +80,11 @@ rg -n "^(<<<<<<<|=======|>>>>>>>)" extract_graph_data.py
 python3 extract_graph_data.py --help
 ```
 
+
+### デバッグ（特定国のカテゴリ合計確認）
+
+```bash
+python3 extract_graph_data.py World-Nuclear-Outlook-Report_dfed5656_country.pdf --debug-country Armenia
+```
+
+抽出後に `totals_by_category` を表示し、`60-year operation` / `80-year operation` が0のままかを確認できます。

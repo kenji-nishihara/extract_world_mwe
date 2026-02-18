@@ -1,45 +1,62 @@
 # extract_world_mwe
 
-棒グラフを含むPDFから、年次データをCSV抽出します。
+`World-Nuclear-Outlook-Report_dfed5656_country.pdf` の国別スタック棒グラフから、
+**bar height のみ**で年次カテゴリ別MWeを抽出します。
 
-## 今回の仕様
+## 仕様
 
-- `--country --series --year-min --year-max` を入力しなくても、**全ページを自動抽出**。
-- 数値は**テキストからは抽出せず**、`pdfplumber` で取得した棒グラフ矩形の高さ (`bar_height`) のみを使用。
-- グラフの縦軸目盛り（Y軸数値）を読み取り、`bar_height` を **MWe に換算**。
-<<<<<<< codex/extract-data-from-graphs-in-pdf-7ke6or
+- 数値はテキストから直接読まず、棒グラフ矩形の高さのみを利用（`source=bar_height` 固定）。
+- Y軸目盛り値（0, 200, ...）から線形換算して、棒高さをMWeへ変換。
+- 年ラベル（2025〜2050）をX座標で検出し、各棒を最近傍の年に割当。
+- 凡例色が取れれば「色→カテゴリ」を凡例から決定、難しい場合はページ内2050表の値で補完マッチング。
+- PDF内の `<<<<<<<` / `=======` / `>>>>>>>` 行は無視します。
+
+## 出力
+
+### long形式（デフォルト）
+
+```csv
+country,year,category,mwe,unit,source
+Argentina,2025,60-year operation,1780.12,MWe,bar_height
+...
+```
+
+### pivot形式（自動生成）
+
+`*_pivot.csv` も同時に作成します。
+
+```csv
+country,year,60-year operation,80-year operation,Under construction,Planned,Proposed,Potential,Government target
+Argentina,2025,...
+```
 - 年ラベルと棒のX座標は「最も近い年」に自動対応付けし、ラベル間隔が広いページでも取りこぼしを減らします。
-=======
->>>>>>> main
 - 出力の `source` は `bar_height` 固定。
 
 ## 実行
 
 ```bash
-python3 extract_graph_data.py World-Nuclear-Outlook-Report_dfed5656_country.pdf -o all_elements.csv
+python3 extract_graph_data.py World-Nuclear-Outlook-Report_dfed5656_country.pdf
 ```
 
-出力列:
+出力先指定:
 
-- `country`
-- `page`
-- `year`
-- `element` (`element_1`, `element_2`, ...)
-- `value` (MWe換算値)
-- `unit` (`MWe`)
-- `source` (`bar_height`)
-- `line`（現状は空文字）
+```bash
+python3 extract_graph_data.py World-Nuclear-Outlook-Report_dfed5656_country.pdf \
+  -o world_nuclear_outlook_country_year_category_mwe.csv \
+  --pivot-output world_nuclear_outlook_country_year_category_mwe_pivot.csv
+```
 
-## 補足
+特定国 + 指定系列だけの横持ち出力（任意）:
 
-- `source=bar_height` は、PDF内の棒グラフがベクター矩形として保持され、かつY軸目盛り数値が読めるページで有効です。
-- 国名はページ内の見出し候補テキストから推定します。
-- PDFテキスト中に `>>>>>>> main` のようなマージ競合マーカー行が混ざっていても、自動的に無視します。
+```bash
+python3 extract_graph_data.py World-Nuclear-Outlook-Report_dfed5656_country.pdf \
+  --country Argentina \
+  --series "60-year operation,80-year operation,Government target" \
+  -o argentina_selected_series.csv
+```
 
 ## 依存関係
 
 ```bash
 pip install pdfplumber
 ```
-
-このスクリプトは bar_height 抽出のため `pdfplumber` が必須です。

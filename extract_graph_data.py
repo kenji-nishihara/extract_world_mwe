@@ -1,40 +1,44 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-"""Extract bar-height based MWe values from graph-heavy PDFs.
+"""Extract country/year/category MWe values from stacked-bar charts in the WNO PDF.
 
-Default mode:
-- Automatically extract all countries/elements in 2025-2050.
-- Uses bar-height estimation only (`source=bar_height`).
+Default behavior:
+- Read all pages.
+- Extract chart bars from geometry (`source=bar_height`) only.
+- Convert bar heights to MWe from Y-axis ticks.
+- Save long-format CSV and a pivot CSV.
 """
 
 import argparse
 import csv
+import itertools
 import re
 import sys
 from collections import defaultdict
 from pathlib import Path
+from statistics import median
 
-YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2}|21\d{2})\b")
-COUNTRY_CANDIDATE_RE = re.compile(r"^[A-Z][A-Za-z .\-']{2,}$")
-
-COUNTRY_STOPWORDS = {
-    "world nuclear outlook",
-    "reference case",
-    "capacity",
-    "generation",
-    "government target",
-    "year",
-    "source",
-    "figure",
-    "mwe",
-    "long-term operation",
-    "proposed",
-    "existing",
-    "new build",
-}
+CATEGORIES = [
+    "60-year operation",
+    "80-year operation",
+    "Under construction",
+    "Planned",
+    "Proposed",
+    "Potential",
+    "Government target",
+]
 
 MERGE_MARKER_PREFIXES = ("<<<<<<<", "=======", ">>>>>>>")
+
+
+class LinMap:
+    def __init__(self, a: float, b: float) -> None:
+        self.a = a
+        self.b = b
+
+    def f(self, y: float) -> float:
+        return self.a * y + self.b
 
 
 def normalize_line(line: str) -> str:
@@ -46,253 +50,399 @@ def is_merge_marker_line(line: str) -> bool:
     return any(stripped.startswith(prefix) for prefix in MERGE_MARKER_PREFIXES)
 
 
-def parse_numeric(token: str) -> float | None:
-    cleaned = token.replace(",", "").replace("%", "")
-    try:
-        return float(cleaned)
-    except ValueError:
+def norm_color(c: object, nd: int = 2) -> tuple[float, ...] | None:
+    if c is None:
         return None
+    if isinstance(c, (int, float)):
+        return (round(float(c), nd),)
+    if isinstance(c, (list, tuple)):
+        try:
+            return tuple(round(float(x), nd) for x in c)
+        except (TypeError, ValueError):
+            return None
+    return None
 
 
-def is_country_candidate(line: str) -> bool:
-    lower = line.lower().strip()
-    if lower in COUNTRY_STOPWORDS:
-        return False
-    if any(ch.isdigit() for ch in line):
-        return False
-    if len(line) > 40 or line.count(" ") > 3:
-        return False
-    return bool(COUNTRY_CANDIDATE_RE.match(line))
+def parse_country_and_table(page_text: str) -> tuple[str | None, list[float] | None]:
+    lines = [normalize_line(ln) for ln in (page_text or "").splitlines()]
+    lines = [ln for ln in lines if ln and not is_merge_marker_line(ln)]
 
-
-def infer_country_for_lines(lines: list[str], fallback: str = "Unknown") -> str:
-    # Prefer early heading lines but skip generic chart labels.
-    for line in lines[:12]:
-        if is_country_candidate(line):
-            return line
-    for line in lines:
-        if is_country_candidate(line):
-            return line
-    return fallback
-
-
-def _pick_y(rect: dict, key_top: bool) -> float:
-    if key_top:
-        for k in ("top", "y0"):
-            if k in rect and rect[k] is not None:
-                return float(rect[k])
-    else:
-        for k in ("bottom", "y1"):
-            if k in rect and rect[k] is not None:
-                return float(rect[k])
-    return 0.0
-
-
-def estimate_bar_values_from_page(page_obj: dict, year_min: int, year_max: int) -> list[dict[str, str]]:
-    """Estimate MWe values from bar heights using y-axis ticks and bar rectangles."""
-    words = page_obj.get("words", [])
-    rects = page_obj.get("rects", [])
-    if not words or not rects:
-        return []
-
-    year_words: list[tuple[int, float]] = []
-    for word in words:
-        txt = str(word.get("text", "")).strip()
-        match = YEAR_RE.search(txt)
-        if not match:
+    country = None
+    for idx, ln in enumerate(lines):
+        m = re.match(r"^(\d+\.\d+\.\d+)\s+(.+)$", ln)
+        if not m:
             continue
-        year = int(match.group(1))
-        if year_min <= year <= year_max:
-            x0 = float(word.get("x0", 0.0))
-            x1 = float(word.get("x1", x0))
-            year_words.append((year, (x0 + x1) / 2))
-    if not year_words:
-        return []
+        head = m.group(2).strip()
+        if idx + 1 < len(lines):
+            nxt = lines[idx + 1]
+            if not re.match(r"^\d+\.\d+\.\d+\s+", nxt) and not nxt.startswith("["):
+                if (not re.search(r"\d", nxt)) and (len(head) < 14 or head.endswith(("Kin", "Arab", "Rep", "Isl", "Fed", "Dem"))):
+                    head = f"{head} {nxt}".strip()
+        country = head
+        break
 
-    min_year_x = min(x for _, x in year_words)
+    nums = None
+    for ln in lines:
+        toks = re.findall(r"\b\d{1,3}(?:,\d{3})*(?:\.\d+)?\b", ln)
+        if len(toks) == 8:
+            nums = [float(t.replace(",", "")) for t in toks]
+            break
 
+    return country, nums
+
+
+def fit_linear_y_to_value(points: list[tuple[float, float]]) -> LinMap | None:
+    if len(points) < 2:
+        return None
+    ys = [p[0] for p in points]
+    vs = [p[1] for p in points]
+    y_mean = sum(ys) / len(ys)
+    v_mean = sum(vs) / len(vs)
+    var_y = sum((y - y_mean) ** 2 for y in ys)
+    if var_y == 0:
+        return None
+    cov = sum((y - y_mean) * (v - v_mean) for y, v in points)
+    a = cov / var_y
+    b = v_mean - a * y_mean
+    return LinMap(a, b)
+
+
+def extract_y_ticks(words: list[dict]) -> LinMap | None:
     ticks: list[tuple[float, float]] = []
-    for word in words:
-        txt = str(word.get("text", "")).strip().replace(",", "")
-        val = parse_numeric(txt)
-        if val is None:
+    for w in words:
+        txt = str(w.get("text", "")).strip()
+        if not re.fullmatch(r"\d{1,4}(?:,\d{3})*", txt):
             continue
-        x0 = float(word.get("x0", 0.0))
-        x1 = float(word.get("x1", x0))
-        xc = (x0 + x1) / 2
-        if xc >= min_year_x - 8:
+        if float(w.get("x0", 0.0)) >= 130:
             continue
-        top = float(word.get("top", word.get("y0", 0.0)))
-        bottom = float(word.get("bottom", word.get("y1", top)))
-        yc = (top + bottom) / 2
-        ticks.append((yc, val))
+        top = float(w.get("top", 0.0))
+        bottom = float(w.get("bottom", top))
+        if not (170 <= top <= 470):
+            continue
+        y_mid = 0.5 * (top + bottom)
+        ticks.append((y_mid, float(txt.replace(",", ""))))
 
     if len(ticks) < 2:
-        return []
+        return None
 
-    ticks.sort(key=lambda t: t[1])
-    y_low, v_low = ticks[0]
-    y_high, v_high = ticks[-1]
-    if abs(y_high - y_low) < 1e-6 or abs(v_high - v_low) < 1e-6:
-        return []
+    by_val: dict[float, list[float]] = defaultdict(list)
+    for y, v in ticks:
+        by_val[v].append(y)
+    dedup = [(median(ys), v) for v, ys in by_val.items()]
+    dedup.sort(key=lambda t: t[1])
+    return fit_linear_y_to_value(dedup)
 
-    def y_to_value(y: float) -> float:
-        ratio = (y - y_low) / (y_high - y_low)
-        return v_low + ratio * (v_high - v_low)
 
-    tick_ys = [y for y, _ in ticks]
-    y_tick_top = min(tick_ys)
-    y_tick_bottom = max(tick_ys)
-
-    bars: list[tuple[float, float]] = []
-    for rect in rects:
-        x0 = float(rect.get("x0", 0.0))
-        x1 = float(rect.get("x1", x0))
-        y_top = _pick_y(rect, key_top=True)
-        y_bottom = _pick_y(rect, key_top=False)
-        width = abs(x1 - x0)
-        height = abs(y_bottom - y_top)
-        if width < 1.0 or height < 4.0:
+def extract_year_positions(words: list[dict], rects: list[dict]) -> dict[int, float]:
+    year_to_x: dict[int, list[float]] = defaultdict(list)
+    for w in words:
+        txt = str(w.get("text", "")).strip()
+        if not re.fullmatch(r"\d{4}", txt):
             continue
+        for cand in (txt, txt[::-1]):
+            if cand.startswith("20"):
+                year = int(cand)
+                if 2024 <= year <= 2051 and 280 <= float(w.get("top", 0.0)) <= 570:
+                    xc = 0.5 * (float(w.get("x0", 0.0)) + float(w.get("x1", w.get("x0", 0.0))))
+                    year_to_x[year].append(xc)
+                break
 
-        # Keep bars within plot area and aligned to the bottom axis region.
-        bottom_y = max(y_top, y_bottom)
-        top_y = min(y_top, y_bottom)
-        if bottom_y < y_tick_bottom - 40 or bottom_y > y_tick_bottom + 40:
+    if year_to_x:
+        out = {y: float(median(xs)) for y, xs in year_to_x.items()}
+        return dict(sorted(out.items()))
+
+    # fallback from bar centers
+    x_centers: list[float] = []
+    for r in rects:
+        if not r.get("fill"):
             continue
-        if top_y < y_tick_top - 10 or top_y > y_tick_bottom:
+        if norm_color(r.get("non_stroking_color")) is None:
             continue
-
-        xc = (x0 + x1) / 2
-        if xc < min_year_x - 5:
+        top = float(r.get("top", 0.0))
+        h = float(r.get("height", 0.0))
+        w = float(r.get("width", 0.0))
+        if not (110 <= top <= 390) or h < 2.0 or w > 40.0:
             continue
-        bars.append((xc, top_y))
+        xc = 0.5 * (float(r.get("x0", 0.0)) + float(r.get("x1", r.get("x0", 0.0))))
+        x_centers.append(xc)
 
-    if not bars:
-        return []
+    if not x_centers:
+        return {}
 
-    years_with_x = sorted(year_words, key=lambda t: t[1])
-    grouped: dict[int, list[tuple[float, float]]] = defaultdict(list)
-    for xc, y_top in bars:
-        nearest_year, _ = min(years_with_x, key=lambda yx: abs(yx[1] - xc))
-        grouped[nearest_year].append((xc, y_top))
+    x_centers.sort()
+    dedup = [x_centers[0]]
+    for x in x_centers[1:]:
+        if abs(x - dedup[-1]) > 0.9:
+            dedup.append(x)
+    if len(dedup) < 26:
+        return {}
 
-    for year in grouped:
-        grouped[year].sort(key=lambda item: item[0])
-
-    out: list[dict[str, str]] = []
-    for year in sorted(grouped):
-        for idx, (_, y_top) in enumerate(grouped[year], start=1):
-            out.append(
-                {
-                    "year": str(year),
-                    "element": f"element_{idx}",
-                    "value": str(round(y_to_value(y_top), 2)).rstrip("0").rstrip("."),
-                    "source": "bar_height",
-                }
-            )
+    # quantile-style picks for 26 years
+    years = list(range(2025, 2051))
+    n = len(dedup)
+    out: dict[int, float] = {}
+    for i, yr in enumerate(years):
+        q = i / (len(years) - 1)
+        pos = q * (n - 1)
+        lo = int(pos)
+        hi = min(lo + 1, n - 1)
+        frac = pos - lo
+        val = dedup[lo] * (1 - frac) + dedup[hi] * frac
+        out[yr] = float(val)
     return out
 
 
-def load_pdf_content(pdf_path: Path) -> list[dict]:
-    """Load per-page lines/words/rects using pdfplumber (required for bar-height mode)."""
+def parse_legend_color_map(words: list[dict], rects: list[dict]) -> dict[tuple[float, ...], str]:
+    legend_rects: list[dict] = []
+    for r in rects:
+        if not r.get("fill"):
+            continue
+        col = norm_color(r.get("non_stroking_color"))
+        if col is None:
+            continue
+        w = float(r.get("width", 0.0))
+        h = float(r.get("height", 0.0))
+        top = float(r.get("top", 0.0))
+        if 3.5 <= w <= 14.0 and 3.5 <= h <= 14.0 and 340 <= top <= 570:
+            legend_rects.append(r)
+
+    if not legend_rects:
+        return {}
+
+    def find_label_bbox(cat: str) -> tuple[float, float, float, float] | None:
+        toks = [t.lower() for t in cat.replace("-", " ").split()]
+        hits = [w for w in words if str(w.get("text", "")).lower() in toks and 330 <= float(w.get("top", 0.0)) <= 590]
+        if not hits:
+            return None
+        return (
+            min(float(h["x0"]) for h in hits),
+            min(float(h["top"]) for h in hits),
+            max(float(h["x1"]) for h in hits),
+            max(float(h["bottom"]) for h in hits),
+        )
+
+    cmap: dict[tuple[float, ...], str] = {}
+    for cat in CATEGORIES:
+        bb = find_label_bbox(cat)
+        if bb is None:
+            continue
+        x0, y0, _, y1 = bb
+        ymid = 0.5 * (y0 + y1)
+        best = None
+        best_dist = 10**9
+        for r in legend_rects:
+            rx1 = float(r.get("x1", 0.0))
+            rymid = 0.5 * (float(r.get("top", 0.0)) + float(r.get("bottom", 0.0)))
+            if rx1 <= x0 and abs(rymid - ymid) <= 14:
+                dist = x0 - rx1
+                if dist < best_dist:
+                    best_dist = dist
+                    best = r
+        if best is not None:
+            col = norm_color(best.get("non_stroking_color"))
+            if col is not None:
+                cmap[col] = cat
+
+    return cmap
+
+
+def best_color_to_category_mapping(color_values_2050: dict[tuple[float, ...], float], table_values: list[float], min_mwe: float = 1.0) -> dict[tuple[float, ...], str]:
+    targets_full = table_values[:7]
+    target_idx = [i for i, v in enumerate(targets_full) if v >= min_mwe]
+    observed = [(c, v) for c, v in color_values_2050.items() if v >= min_mwe]
+    observed.sort(key=lambda x: x[1], reverse=True)
+    if not target_idx or not observed:
+        return {}
+
+    if len(observed) > len(target_idx):
+        observed = observed[: len(target_idx)]
+
+    colors = [c for c, _ in observed]
+    obs_vals = [v for _, v in observed]
+    k = len(colors)
+
+    best_cost = float("inf")
+    best_subset = None
+    best_perm = None
+    for subset in itertools.combinations(target_idx, k):
+        target_vals = [targets_full[i] for i in subset]
+        for perm in itertools.permutations(range(k)):
+            cost = 0.0
+            for i_t, j_o in enumerate(perm):
+                cost += abs(target_vals[i_t] - obs_vals[j_o])
+            if cost < best_cost:
+                best_cost = cost
+                best_subset = subset
+                best_perm = perm
+
+    if best_subset is None or best_perm is None:
+        return {}
+
+    mapping: dict[tuple[float, ...], str] = {}
+    for i_t, j_o in enumerate(best_perm):
+        mapping[colors[j_o]] = CATEGORIES[best_subset[i_t]]
+    return mapping
+
+
+def rect_value_mwe(rect: dict, ymap: LinMap) -> float:
+    top = float(rect.get("top", rect.get("y0", 0.0)))
+    bottom = float(rect.get("bottom", rect.get("y1", top)))
+    return abs(ymap.f(bottom) - ymap.f(top))
+
+
+def extract_page_timeseries(page: dict) -> list[dict[str, str]]:
+    country, table_nums = parse_country_and_table(page.get("text", ""))
+    if not country:
+        return []
+
+    words = page.get("words", [])
+    rects = page.get("rects", [])
+    if not words or not rects:
+        return []
+
+    ymap = extract_y_ticks(words)
+    if ymap is None:
+        return []
+
+    year_to_x = extract_year_positions(words, rects)
+    years = sorted(y for y in year_to_x if 2025 <= y <= 2050)
+    if len(years) < 2:
+        return []
+
+    x_vals = [year_to_x[y] for y in years]
+    x_min, x_max = min(x_vals) - 20.0, max(x_vals) + 20.0
+
+    by_year_color: dict[int, dict[tuple[float, ...], float]] = {y: {} for y in years}
+    for r in rects:
+        if not r.get("fill"):
+            continue
+        col = norm_color(r.get("non_stroking_color"))
+        if col is None:
+            continue
+
+        w = float(r.get("width", 0.0))
+        h = float(r.get("height", 0.0))
+        top = float(r.get("top", 0.0))
+        xc = 0.5 * (float(r.get("x0", 0.0)) + float(r.get("x1", r.get("x0", 0.0))))
+
+        if not (x_min <= xc <= x_max):
+            continue
+        if not (105 <= top <= 440):
+            continue
+        if w > 40.0 or w < 3.0 or h < 2.0:
+            continue
+        if w <= 14.0 and 360 <= top <= 570:
+            continue
+
+        nearest_year = min(years, key=lambda y: abs(year_to_x[y] - xc))
+        mwe = rect_value_mwe(r, ymap)
+        by_year_color[nearest_year][col] = by_year_color[nearest_year].get(col, 0.0) + mwe
+
+    legend_map = parse_legend_color_map(words, rects)
+    color_to_category = legend_map
+    if not color_to_category:
+        if table_nums is None:
+            return []
+        yr2050 = 2050 if 2050 in by_year_color else max(by_year_color)
+        color_to_category = best_color_to_category_mapping(by_year_color[yr2050], table_nums)
+        if not color_to_category:
+            return []
+
+    rows: list[dict[str, str]] = []
+    for year in years:
+        sums = {cat: 0.0 for cat in CATEGORIES}
+        for col, value in by_year_color[year].items():
+            cat = color_to_category.get(col)
+            if cat:
+                sums[cat] += value
+
+        for cat in CATEGORIES:
+            rows.append(
+                {
+                    "country": country,
+                    "year": str(year),
+                    "category": cat,
+                    "mwe": f"{sums[cat]:.2f}",
+                    "unit": "MWe",
+                    "source": "bar_height",
+                }
+            )
+
+    if table_nums is not None and 2050 in years:
+        bars_total = sum(float(r["mwe"]) for r in rows if int(r["year"]) == 2050)
+        table_total = float(table_nums[7])
+        if abs(bars_total - table_total) > max(20.0, 0.08 * max(table_total, 1.0)):
+            print(f"[WARN] {country}: 2050 sum mismatch bars={bars_total:.1f}, table={table_total:.1f}")
+
+    return rows
+
+
+def load_pdf_pages(pdf_path: Path) -> list[dict]:
     try:
         import pdfplumber
     except ModuleNotFoundError as exc:
         raise SystemExit(
             "Missing dependency: pdfplumber is required for bar-height extraction.\n"
-            "Install in the same interpreter:\n"
-            "- pip install pdfplumber\n\n"
-            f"Current interpreter: {sys.executable}\n"
-            "Tip (Windows): use `py -m pip install pdfplumber` and run with `py extract_graph_data.py ...`"
+            "Install in same interpreter: pip install pdfplumber\n"
+            f"Current interpreter: {sys.executable}"
         ) from exc
 
     pages: list[dict] = []
     with pdfplumber.open(pdf_path) as pdf:
-        for page_index, page in enumerate(pdf.pages, start=1):
+        for page in pdf.pages:
             text = page.extract_text() or ""
-            page_lines = []
-            for raw_line in text.splitlines():
-                normalized = normalize_line(raw_line)
-                if normalized and not is_merge_marker_line(normalized):
-                    page_lines.append(normalized)
-            pages.append(
-                {
-                    "page": str(page_index),
-                    "lines": page_lines,
-                    "words": page.extract_words() or [],
-                    "rects": page.rects or [],
-                }
+            text = "\n".join(
+                ln for ln in text.splitlines() if ln.strip() and not is_merge_marker_line(ln)
             )
+            pages.append({"text": text, "words": page.extract_words() or [], "rects": page.rects or []})
     return pages
 
 
-def extract_all_countries_elements(pages: list[dict], year_min: int, year_max: int) -> list[dict[str, str]]:
-    rows: list[dict[str, str]] = []
-    for page in pages:
-        page_id = page["page"]
-        country = infer_country_for_lines(page.get("lines", []))
-        for row in estimate_bar_values_from_page(page, year_min=year_min, year_max=year_max):
-            rows.append(
-                {
-                    "country": country,
-                    "page": page_id,
-                    "year": row["year"],
-                    "element": row["element"],
-                    "value": row["value"],
-                    "line": "",
-                    "source": "bar_height",
-                    "unit": "MWe",
-                }
-            )
-    return rows
+def build_country_series_table(rows: list[dict[str, str]], country: str, series: list[str], year_min: int, year_max: int) -> list[dict[str, str]]:
+    target = country.lower().strip()
+    filtered = [r for r in rows if r["country"].lower().strip() == target and year_min <= int(r["year"]) <= year_max]
 
+    by_year_category: dict[int, dict[str, str]] = defaultdict(dict)
+    for r in filtered:
+        by_year_category[int(r["year"])][r["category"]] = r["mwe"]
 
-def build_country_series_table(
-    bar_rows: list[dict[str, str]],
-    country: str,
-    series: list[str],
-    year_min: int,
-    year_max: int,
-) -> list[dict[str, str]]:
-    target = country.lower()
-    matched = [r for r in bar_rows if r["country"].lower() == target]
-
-    by_year: dict[int, dict[int, str]] = defaultdict(dict)
-    for row in matched:
-        year = int(row["year"])
-        if not (year_min <= year <= year_max):
-            continue
-        element = row["element"]
-        if not element.startswith("element_"):
-            continue
-        try:
-            idx = int(element.split("_", 1)[1]) - 1
-        except ValueError:
-            continue
-        by_year[year][idx] = row["value"]
-
-    table: list[dict[str, str]] = []
-    for year in sorted(by_year):
-        out_row: dict[str, str] = {"country": country, "year": str(year)}
-        for idx, series_name in enumerate(series):
-            out_row[series_name] = by_year[year].get(idx, "")
-        table.append(out_row)
-    return table
+    out: list[dict[str, str]] = []
+    for year in sorted(by_year_category):
+        row = {"country": country, "year": str(year)}
+        for s in series:
+            row[s] = by_year_category[year].get(s, "")
+        out.append(row)
+    return out
 
 
 def write_csv(path: Path, rows: list[dict[str, str]], fieldnames: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
 
 
+def build_pivot_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    agg: dict[tuple[str, str], dict[str, str]] = {}
+    for r in rows:
+        key = (r["country"], r["year"])
+        agg.setdefault(key, {})[r["category"]] = r["mwe"]
+
+    out = []
+    for (country, year), cats in sorted(agg.items(), key=lambda kv: (kv[0][0], int(kv[0][1]))):
+        row = {"country": country, "year": year}
+        for cat in CATEGORIES:
+            row[cat] = cats.get(cat, "0")
+        out.append(row)
+    return out
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Extract MWe values from graph-based PDF bars (bar-height only).")
+    parser = argparse.ArgumentParser(description="Extract year/category MWe from PDF stacked bars (bar_height only).")
     parser.add_argument("pdf", type=Path, help="Input PDF path")
-    parser.add_argument("-o", "--output", type=Path, default=Path("extracted_all_countries_long.csv"))
+    parser.add_argument("-o", "--output", type=Path, default=Path("world_nuclear_outlook_country_year_category_mwe.csv"))
+    parser.add_argument("--pivot-output", type=Path, default=None, help="Output path for pivot CSV")
     parser.add_argument("-c", "--country", "-country", dest="country")
     parser.add_argument("-s", "--series", "-series", dest="series")
     parser.add_argument("-y", "--year-min", "-year-min", dest="year_min", type=int, default=2025)
@@ -302,23 +452,33 @@ def main() -> None:
     if not args.pdf.exists():
         raise SystemExit(f"PDF not found: {args.pdf}")
 
-    pages = load_pdf_content(args.pdf)
-    rows = extract_all_countries_elements(pages, args.year_min, args.year_max)
+    pages = load_pdf_pages(args.pdf)
+    rows: list[dict[str, str]] = []
+    for page in pages:
+        rows.extend(extract_page_timeseries(page))
 
-    if args.country and args.series:
+    rows = [r for r in rows if args.year_min <= int(r["year"]) <= args.year_max]
+    if args.country:
+        rows = [r for r in rows if r["country"].lower() == args.country.lower()]
+
+    if not rows:
+        raise SystemExit("No data extracted. Check PDF_PATH and heuristics.")
+
+    if args.series:
+        if not args.country:
+            raise SystemExit("--series requires --country.")
         series = [s.strip() for s in args.series.split(",") if s.strip()]
-        if not series:
-            raise SystemExit("No valid series names were provided in --series")
-        table_rows = build_country_series_table(rows, args.country, series, args.year_min, args.year_max)
-        write_csv(args.output, table_rows, ["country", "year", *series])
-        print(f"Extracted {len(table_rows)} rows for {args.country} ({args.year_min}-{args.year_max}) -> {args.output}")
+        table = build_country_series_table(rows, args.country, series, args.year_min, args.year_max)
+        write_csv(args.output, table, ["country", "year", *series])
+        print(f"Saved: {args.output}")
         return
 
-    if args.country or args.series:
-        raise SystemExit("Use --country and --series together, or neither.")
-
-    write_csv(args.output, rows, ["country", "page", "year", "element", "value", "unit", "source", "line"])
-    print(f"Auto extracted {len(rows)} element rows ({args.year_min}-{args.year_max}) -> {args.output}")
+    write_csv(args.output, rows, ["country", "year", "category", "mwe", "unit", "source"])
+    pivot_output = args.pivot_output or args.output.with_name(f"{args.output.stem}_pivot.csv")
+    pivot_rows = build_pivot_rows(rows)
+    write_csv(pivot_output, pivot_rows, ["country", "year", *CATEGORIES])
+    print(f"Saved: {args.output}")
+    print(f"Saved: {pivot_output}")
 
 
 if __name__ == "__main__":

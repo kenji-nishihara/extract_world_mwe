@@ -1,106 +1,66 @@
 import unittest
 
 from extract_graph_data import (
+    CATEGORIES,
+    best_color_to_category_mapping,
     build_country_series_table,
-    estimate_bar_values_from_page,
-    extract_all_countries_elements,
-    infer_country_for_lines,
+    extract_page_timeseries,
     is_merge_marker_line,
+    parse_country_and_table,
 )
 
 
 class ExtractGraphDataTests(unittest.TestCase):
-    def test_estimate_bar_values_from_page(self):
+    def test_parse_country_and_table(self):
+        text = """
+        3.2.1 Argentina
+        1,000 2,000 3,000 4,000 5,000 6,000 7,000 28,000
+        """
+        country, nums = parse_country_and_table(text)
+        self.assertEqual(country, "Argentina")
+        self.assertEqual(nums[-1], 28000.0)
+
+    def test_best_color_to_category_mapping(self):
+        color_vals = {(1.0, 0.0, 0.0): 100.0, (0.0, 1.0, 0.0): 200.0}
+        table = [200.0, 100.0, 0, 0, 0, 0, 0, 300.0]
+        mapping = best_color_to_category_mapping(color_vals, table)
+        self.assertEqual(mapping[(0.0, 1.0, 0.0)], CATEGORIES[0])
+        self.assertEqual(mapping[(1.0, 0.0, 0.0)], CATEGORIES[1])
+
+    def test_extract_page_timeseries_with_legend(self):
         page = {
+            "text": "3.2.1 Argentina\n1,780 0 0 0 300 0 0 2,080",
             "words": [
-                {"text": "0", "x0": 10, "x1": 20, "top": 100, "bottom": 110},
-                {"text": "100", "x0": 10, "x1": 30, "top": 0, "bottom": 10},
-                {"text": "2025", "x0": 90, "x1": 110, "top": 120, "bottom": 130},
+                {"text": "0", "x0": 20, "x1": 30, "top": 360, "bottom": 370},
+                {"text": "2000", "x0": 20, "x1": 40, "top": 200, "bottom": 210},
+                {"text": "2025", "x0": 200, "x1": 220, "top": 520, "bottom": 540},
+                {"text": "2050", "x0": 500, "x1": 520, "top": 520, "bottom": 540},
+                {"text": "60-year", "x0": 200, "x1": 240, "top": 560, "bottom": 570},
+                {"text": "operation", "x0": 245, "x1": 300, "top": 560, "bottom": 570},
+                {"text": "Proposed", "x0": 200, "x1": 260, "top": 580, "bottom": 590},
             ],
             "rects": [
-                {"x0": 95, "x1": 105, "top": 20, "bottom": 100},
+                # legend swatches
+                {"fill": True, "non_stroking_color": (1, 0, 0), "x0": 185, "x1": 195, "top": 560, "bottom": 570, "width": 10, "height": 10},
+                {"fill": True, "non_stroking_color": (0, 1, 0), "x0": 185, "x1": 195, "top": 580, "bottom": 590, "width": 10, "height": 10},
+                # bars at 2025
+                {"fill": True, "non_stroking_color": (1, 0, 0), "x0": 198, "x1": 210, "top": 220, "bottom": 360, "width": 12, "height": 140},
+                {"fill": True, "non_stroking_color": (0, 1, 0), "x0": 198, "x1": 210, "top": 340, "bottom": 360, "width": 12, "height": 20},
             ],
         }
-        rows = estimate_bar_values_from_page(page, 2025, 2050)
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["year"], "2025")
-        self.assertEqual(rows[0]["source"], "bar_height")
+        rows = extract_page_timeseries(page)
+        self.assertTrue(rows)
+        self.assertTrue(all(r["source"] == "bar_height" for r in rows))
+        self.assertTrue(any(r["country"] == "Argentina" and r["year"] == "2025" for r in rows))
 
-    def test_extract_all_countries_elements_auto_bar_only(self):
-        pages = [
-            {
-                "page": "1",
-                "lines": ["Argentina", "2025 10 20 30"],
-                "words": [
-                    {"text": "0", "x0": 10, "x1": 20, "top": 100, "bottom": 110},
-                    {"text": "100", "x0": 10, "x1": 30, "top": 0, "bottom": 10},
-                    {"text": "2025", "x0": 90, "x1": 110, "top": 120, "bottom": 130},
-                ],
-                "rects": [{"x0": 95, "x1": 105, "top": 20, "bottom": 100}],
-            },
-        ]
-        rows = extract_all_countries_elements(pages, year_min=2025, year_max=2050)
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["country"], "Argentina")
-        self.assertEqual(rows[0]["unit"], "MWe")
-        self.assertEqual(rows[0]["source"], "bar_height")
-
-    def test_build_country_series_table_from_bar_rows(self):
+    def test_build_country_series_table(self):
         rows = [
-            {
-                "country": "Argentina",
-                "page": "1",
-                "year": "2025",
-                "element": "element_1",
-                "value": "11",
-                "source": "bar_height",
-                "unit": "MWe",
-                "line": "",
-            },
-            {
-                "country": "Argentina",
-                "page": "1",
-                "year": "2025",
-                "element": "element_2",
-                "value": "22",
-                "source": "bar_height",
-                "unit": "MWe",
-                "line": "",
-            },
+            {"country": "Argentina", "year": "2025", "category": "60-year operation", "mwe": "100", "unit": "MWe", "source": "bar_height"},
+            {"country": "Argentina", "year": "2025", "category": "Government target", "mwe": "50", "unit": "MWe", "source": "bar_height"},
         ]
-        table = build_country_series_table(
-            bar_rows=rows,
-            country="Argentina",
-            series=["60 year operation", "80 year operation", "Government target"],
-            year_min=2025,
-            year_max=2050,
-        )
-        self.assertEqual(len(table), 1)
-        self.assertEqual(table[0]["60 year operation"], "11")
-        self.assertEqual(table[0]["80 year operation"], "22")
-        self.assertEqual(table[0]["Government target"], "")
-
-
-    def test_infer_country_skips_generic_heading(self):
-        lines = ["Long-term operation", "Argentina", "Reference case"]
-        self.assertEqual(infer_country_for_lines(lines), "Argentina")
-
-    def test_assign_bar_to_nearest_year_without_strict_threshold(self):
-        page = {
-            "words": [
-                {"text": "0", "x0": 10, "x1": 20, "top": 100, "bottom": 110},
-                {"text": "2000", "x0": 10, "x1": 30, "top": 0, "bottom": 10},
-                {"text": "2025", "x0": 90, "x1": 110, "top": 120, "bottom": 130},
-                {"text": "2030", "x0": 150, "x1": 170, "top": 120, "bottom": 130},
-            ],
-            "rects": [
-                # slightly far from 2025 label but nearest year should still be 2025
-                {"x0": 120, "x1": 130, "top": 20, "bottom": 100},
-            ],
-        }
-        rows = estimate_bar_values_from_page(page, 2025, 2050)
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["year"], "2025")
+        table = build_country_series_table(rows, "Argentina", ["60-year operation", "Government target"], 2025, 2050)
+        self.assertEqual(table[0]["60-year operation"], "100")
+        self.assertEqual(table[0]["Government target"], "50")
 
     def test_merge_marker_lines_are_ignored(self):
         self.assertTrue(is_merge_marker_line(">>>>>>> main"))

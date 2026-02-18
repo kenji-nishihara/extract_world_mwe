@@ -4,6 +4,7 @@ from extract_graph_data import (
     build_country_series_table,
     estimate_bar_values_from_page,
     extract_all_countries_elements,
+    is_merge_marker_line,
     parse_year_value_row,
 )
 
@@ -21,29 +22,16 @@ class ExtractGraphDataTests(unittest.TestCase):
             {"page": "2", "line": "Argentina"},
             {"page": "2", "line": "2025 11 22 33 44"},
             {"page": "2", "line": "2030 12 23 34 45"},
-<<<<<<< codex/extract-data-from-graphs-in-pdf-pvdyhs
-=======
-            {"page": "3", "line": "Brazil"},
-            {"page": "3", "line": "2025 99 99 99 99"},
->>>>>>> main
         ]
         table = build_country_series_table(
             lines=lines,
             country="Argentina",
-<<<<<<< codex/extract-data-from-graphs-in-pdf-pvdyhs
             series=["60 year operation", "80 year operation", "Government target"],
-=======
-            series=[
-                "60 year operation",
-                "80 year operation",
-                "Government target",
-            ],
->>>>>>> main
+            series=["60 year operation", "80 year operation", "Government target"],
             year_min=2025,
             year_max=2050,
         )
         self.assertEqual(len(table), 2)
-<<<<<<< codex/extract-data-from-graphs-in-pdf-pvdyhs
         self.assertEqual(table[0]["60 year operation"], "11")
 
     def test_estimate_bar_values_from_page(self):
@@ -70,13 +58,10 @@ class ExtractGraphDataTests(unittest.TestCase):
         self.assertEqual(len(rows), 3)
         self.assertEqual(rows[0]["country"], "Argentina")
         self.assertEqual(rows[0]["unit"], "MWe")
-=======
-        self.assertEqual(table[0]["country"], "Argentina")
-        self.assertEqual(table[0]["year"], "2025")
-        self.assertEqual(table[0]["60 year operation"], "11")
-        self.assertEqual(table[0]["80 year operation"], "22")
-        self.assertEqual(table[0]["Government target"], "33")
->>>>>>> main
+
+    def test_merge_marker_lines_are_ignored(self):
+        self.assertTrue(is_merge_marker_line(">>>>>>> main"))
+        self.assertIsNone(parse_year_value_row(">>>>>>> main"))
 
 
 if __name__ == "__main__":

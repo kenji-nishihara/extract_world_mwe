@@ -246,7 +246,9 @@ def parse_legend_color_map(words: list[dict], rects: list[dict]) -> dict[tuple[f
         return {}
 
     def _tokenize(text: str) -> list[str]:
-        return [t.lower() for t in text.replace("-", " ").split() if t]
+        lowered = text.lower()
+        # split robustly: "60-year", "60year", "60 year" -> ["60", "year"]
+        return re.findall(r"[a-z]+|\d+", lowered)
 
     def find_label_bbox(cat: str) -> tuple[float, float, float, float] | None:
         cat_toks = _tokenize(cat)
@@ -312,15 +314,23 @@ def parse_legend_color_map(words: list[dict], rects: list[dict]) -> dict[tuple[f
 
 
 def best_color_to_category_mapping(color_values_2050: dict[tuple[float, ...], float], table_values: list[float], min_mwe: float = 1.0) -> dict[tuple[float, ...], str]:
+    """Map observed 2050 bar colors to 7 categories using table values.
+
+    Unlike earlier versions, zero-valued categories are also valid targets so
+    colors that fade out by 2050 (e.g., 60-year operation) are not dropped.
+    """
+
     targets_full = table_values[:7]
-    target_idx = [i for i, v in enumerate(targets_full) if v >= min_mwe]
+    all_target_idx = list(range(len(CATEGORIES)))
+
     observed = [(c, v) for c, v in color_values_2050.items() if v >= min_mwe]
     observed.sort(key=lambda x: x[1], reverse=True)
-    if not target_idx or not observed:
+    if not observed:
         return {}
 
-    if len(observed) > len(target_idx):
-        observed = observed[: len(target_idx)]
+    # At most 7 categories can be assigned directly.
+    if len(observed) > len(all_target_idx):
+        observed = observed[: len(all_target_idx)]
 
     colors = [c for c, _ in observed]
     obs_vals = [v for _, v in observed]
@@ -329,12 +339,16 @@ def best_color_to_category_mapping(color_values_2050: dict[tuple[float, ...], fl
     best_cost = float("inf")
     best_subset = None
     best_perm = None
-    for subset in itertools.combinations(target_idx, k):
+    for subset in itertools.combinations(all_target_idx, k):
         target_vals = [targets_full[i] for i in subset]
         for perm in itertools.permutations(range(k)):
             cost = 0.0
             for i_t, j_o in enumerate(perm):
-                cost += abs(target_vals[i_t] - obs_vals[j_o])
+                # slight preference for matching nonzero table categories
+                base = abs(target_vals[i_t] - obs_vals[j_o])
+                if target_vals[i_t] == 0 and obs_vals[j_o] > 0:
+                    base += 0.05 * obs_vals[j_o]
+                cost += base
             if cost < best_cost:
                 best_cost = cost
                 best_subset = subset

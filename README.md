@@ -29,6 +29,8 @@ Argentina,2025,60-year operation,1780.12,MWe,bar_height
 country,year,60-year operation,80-year operation,Under construction,Planned,Proposed,Potential,Government target
 Argentina,2025,...
 ```
+- 年ラベルと棒のX座標は「最も近い年」に自動対応付けし、ラベル間隔が広いページでも取りこぼしを減らします。
+- 出力の `source` は `bar_height` 固定。
 
 ## 実行
 

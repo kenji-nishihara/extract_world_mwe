@@ -39,6 +39,7 @@ pip install pdfplumber
 ```
 
 `pdfplumber` がない場合は `pypdf` にフォールバックします（この場合 `bar_height` は利用不可）。
+`pdfplumber` がない場合は `pypdf` にフォールバックします（この場合 `bar_height` は利用不可）。
 
 ```bash
 pip install pypdf

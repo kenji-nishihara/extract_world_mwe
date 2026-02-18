@@ -27,6 +27,7 @@ class ExtractGraphDataTests(unittest.TestCase):
             lines=lines,
             country="Argentina",
             series=["60 year operation", "80 year operation", "Government target"],
+            series=["60 year operation", "80 year operation", "Government target"],
             year_min=2025,
             year_max=2050,
         )

@@ -13,6 +13,7 @@ import csv
 import re
 import sys
 from collections import defaultdict
+from collections import defaultdict
 from pathlib import Path
 
 YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2}|21\d{2})\b")
@@ -341,6 +342,8 @@ def main() -> None:
 
     if not args.pdf.exists():
         raise SystemExit(f"PDF not found: {args.pdf}")
+
+    lines, pages = load_pdf_content(args.pdf)
 
     lines, pages = load_pdf_content(args.pdf)
 

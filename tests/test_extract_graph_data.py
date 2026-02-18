@@ -116,6 +116,26 @@ class ExtractGraphDataTests(unittest.TestCase):
         self.assertTrue(rows)
         self.assertTrue(any(r["category"] == "80-year operation" and float(r["mwe"]) > 0 for r in rows if r["year"] == "2025"))
 
+
+    def test_extract_page_timeseries_accepts_multiline_60year_legend(self):
+        page = {
+            "text": "3.2.1 Armenia\n0 900 200 0 0 0 0 1100",
+            "words": [
+                {"text": "0", "x0": 20, "x1": 30, "top": 360, "bottom": 370},
+                {"text": "1000", "x0": 20, "x1": 40, "top": 200, "bottom": 210},
+                {"text": "2025", "x0": 200, "x1": 220, "top": 520, "bottom": 540},
+                {"text": "2050", "x0": 500, "x1": 520, "top": 520, "bottom": 540},
+                {"text": "60-year", "x0": 200, "x1": 245, "top": 560, "bottom": 570},
+                {"text": "operation", "x0": 200, "x1": 275, "top": 572, "bottom": 582},
+            ],
+            "rects": [
+                {"fill": True, "non_stroking_color": (0.92, 0.11, 0.10), "x0": 185, "x1": 195, "top": 560, "bottom": 570, "width": 10, "height": 10},
+                {"fill": True, "non_stroking_color": (0.87, 0.15, 0.13), "x0": 198, "x1": 210, "top": 230, "bottom": 360, "width": 12, "height": 130},
+            ],
+        }
+        rows = extract_page_timeseries(page)
+        self.assertTrue(any(r["category"] == "60-year operation" and float(r["mwe"]) > 0 for r in rows if r["year"] == "2025"))
+
     def test_extract_page_timeseries_with_legend(self):
         page = {
             "text": "3.2.1 Argentina\n1,780 0 0 0 300 0 0 2,080",

@@ -76,7 +76,7 @@ def resolve_category_by_color(
     color: tuple[float, ...],
     direct_map: dict[tuple[float, ...], str],
     *,
-    max_dist: float = 0.18,
+    max_dist: float = 0.35,
 ) -> str | None:
     """Resolve a bar color to category with nearest-color fallback.
 
@@ -303,7 +303,11 @@ def parse_legend_color_map(words: list[dict], rects: list[dict]) -> dict[tuple[f
         best_score = 0
 
         for band in sorted(rows):
-            row_words = sorted(rows[band], key=lambda w: float(w.get("x0", 0.0)))
+            # merge neighboring bands to tolerate multi-line/small jitter legends
+            merged_words = []
+            for b in (band - 1, band, band + 1):
+                merged_words.extend(rows.get(b, []))
+            row_words = sorted(merged_words, key=lambda w: (float(w.get("top", 0.0)), float(w.get("x0", 0.0))))
             row_tokens: list[str] = []
             for w in row_words:
                 row_tokens.extend(_tokenize(str(w.get("text", ""))))

@@ -6,6 +6,7 @@ from extract_graph_data import (
     build_country_series_table,
     extract_page_timeseries,
     is_merge_marker_line,
+    mapping_cost_vs_table,
     parse_country_and_table,
 )
 
@@ -26,6 +27,12 @@ class ExtractGraphDataTests(unittest.TestCase):
         mapping = best_color_to_category_mapping(color_vals, table)
         self.assertEqual(mapping[(0.0, 1.0, 0.0)], CATEGORIES[0])
         self.assertEqual(mapping[(1.0, 0.0, 0.0)], CATEGORIES[1])
+
+    def test_mapping_cost_vs_table(self):
+        mapping = {(1.0, 0.0, 0.0): "60-year operation"}
+        color_values = {(1.0, 0.0, 0.0): 100.0}
+        table = [100.0, 0, 0, 0, 0, 0, 0, 100.0]
+        self.assertEqual(mapping_cost_vs_table(mapping, color_values, table), 0.0)
 
     def test_extract_page_timeseries_with_legend(self):
         page = {

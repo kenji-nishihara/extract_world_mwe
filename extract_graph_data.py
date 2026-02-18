@@ -142,7 +142,7 @@ def extract_year_positions(words: list[dict], rects: list[dict]) -> dict[int, fl
         for cand in (txt, txt[::-1]):
             if cand.startswith("20"):
                 year = int(cand)
-                if 2024 <= year <= 2051 and 280 <= float(w.get("top", 0.0)) <= 570:
+                if 2024 <= year <= 2051 and 240 <= float(w.get("top", 0.0)) <= 580:
                     xc = 0.5 * (float(w.get("x0", 0.0)) + float(w.get("x1", w.get("x0", 0.0))))
                     year_to_x[year].append(xc)
                 break
@@ -209,16 +209,45 @@ def parse_legend_color_map(words: list[dict], rects: list[dict]) -> dict[tuple[f
     if not legend_rects:
         return {}
 
+    def _tokenize(text: str) -> list[str]:
+        return [t.lower() for t in text.replace("-", " ").split() if t]
+
     def find_label_bbox(cat: str) -> tuple[float, float, float, float] | None:
-        toks = [t.lower() for t in cat.replace("-", " ").split()]
-        hits = [w for w in words if str(w.get("text", "")).lower() in toks and 330 <= float(w.get("top", 0.0)) <= 590]
-        if not hits:
+        cat_toks = _tokenize(cat)
+        if not cat_toks:
             return None
+
+        legend_words = [
+            w
+            for w in words
+            if 330 <= float(w.get("top", 0.0)) <= 600 and str(w.get("text", "")).strip()
+        ]
+        legend_words.sort(key=lambda w: (round(float(w.get("top", 0.0)) / 8.0), float(w.get("x0", 0.0))))
+
+        best_hits: list[dict] | None = None
+        for i in range(len(legend_words)):
+            hits = [legend_words[i]]
+            seen_toks = _tokenize(str(legend_words[i].get("text", "")))
+            j = i + 1
+            while j < len(legend_words) and len(seen_toks) < len(cat_toks):
+                if abs(float(legend_words[j].get("top", 0.0)) - float(hits[-1].get("top", 0.0))) > 12:
+                    break
+                hits.append(legend_words[j])
+                seen_toks.extend(_tokenize(str(legend_words[j].get("text", ""))))
+                j += 1
+
+            if seen_toks[: len(cat_toks)] == cat_toks:
+                best_hits = hits[: max(1, len(cat_toks))]
+                break
+
+        if not best_hits:
+            return None
+
         return (
-            min(float(h["x0"]) for h in hits),
-            min(float(h["top"]) for h in hits),
-            max(float(h["x1"]) for h in hits),
-            max(float(h["bottom"]) for h in hits),
+            min(float(h["x0"]) for h in best_hits),
+            min(float(h["top"]) for h in best_hits),
+            max(float(h["x1"]) for h in best_hits),
+            max(float(h["bottom"]) for h in best_hits),
         )
 
     cmap: dict[tuple[float, ...], str] = {}
@@ -284,6 +313,26 @@ def best_color_to_category_mapping(color_values_2050: dict[tuple[float, ...], fl
     return mapping
 
 
+def mapping_cost_vs_table(
+    mapping: dict[tuple[float, ...], str],
+    year_color_values: dict[tuple[float, ...], float],
+    table_values: list[float],
+) -> float:
+    if not mapping:
+        return float("inf")
+
+    est = {cat: 0.0 for cat in CATEGORIES}
+    for color, value in year_color_values.items():
+        cat = mapping.get(color)
+        if cat:
+            est[cat] += value
+
+    cost = 0.0
+    for idx, cat in enumerate(CATEGORIES):
+        cost += abs(est[cat] - float(table_values[idx]))
+    return cost
+
+
 def rect_value_mwe(rect: dict, ymap: LinMap) -> float:
     top = float(rect.get("top", rect.get("y0", 0.0)))
     bottom = float(rect.get("bottom", rect.get("y1", top)))
@@ -329,7 +378,7 @@ def extract_page_timeseries(page: dict) -> list[dict[str, str]]:
             continue
         if not (105 <= top <= 440):
             continue
-        if w > 40.0 or w < 3.0 or h < 2.0:
+        if w > 40.0 or w < 2.5 or h < 1.0:
             continue
         if w <= 14.0 and 360 <= top <= 570:
             continue
@@ -340,13 +389,16 @@ def extract_page_timeseries(page: dict) -> list[dict[str, str]]:
 
     legend_map = parse_legend_color_map(words, rects)
     color_to_category = legend_map
-    if not color_to_category:
-        if table_nums is None:
-            return []
+    if table_nums is not None:
         yr2050 = 2050 if 2050 in by_year_color else max(by_year_color)
-        color_to_category = best_color_to_category_mapping(by_year_color[yr2050], table_nums)
-        if not color_to_category:
-            return []
+        fallback_map = best_color_to_category_mapping(by_year_color[yr2050], table_nums)
+        legend_cost = mapping_cost_vs_table(legend_map, by_year_color[yr2050], table_nums)
+        fallback_cost = mapping_cost_vs_table(fallback_map, by_year_color[yr2050], table_nums)
+        if fallback_cost < legend_cost:
+            color_to_category = fallback_map
+
+    if not color_to_category:
+        return []
 
     rows: list[dict[str, str]] = []
     for year in years:

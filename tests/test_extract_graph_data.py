@@ -9,6 +9,7 @@ from extract_graph_data import (
     mapping_cost_vs_table,
     parse_country_and_table,
     extract_y_ticks,
+    resolve_category_by_color,
 )
 
 
@@ -65,6 +66,13 @@ class ExtractGraphDataTests(unittest.TestCase):
         # top around y=220 should be about 1750MWe with this axis spacing
         self.assertAlmostEqual(ymap.f(220), 1750, delta=90)
 
+
+
+    def test_resolve_category_by_near_color(self):
+        cmap = {(0.90, 0.10, 0.10): "60-year operation"}
+        # slightly shifted red should still map to 60-year operation
+        cat = resolve_category_by_color((0.87, 0.12, 0.09), cmap)
+        self.assertEqual(cat, "60-year operation")
 
     def test_extract_page_timeseries_accepts_60year_legend_token(self):
         page = {

@@ -63,6 +63,36 @@ def norm_color(c: object, nd: int = 2) -> tuple[float, ...] | None:
     return None
 
 
+
+
+def color_distance(c1: tuple[float, ...], c2: tuple[float, ...]) -> float:
+    if not c1 or not c2:
+        return float("inf")
+    n = min(len(c1), len(c2))
+    return sum((float(c1[i]) - float(c2[i])) ** 2 for i in range(n)) ** 0.5
+
+
+def resolve_category_by_color(
+    color: tuple[float, ...],
+    direct_map: dict[tuple[float, ...], str],
+    *,
+    max_dist: float = 0.18,
+) -> str | None:
+    """Resolve a bar color to category with nearest-color fallback.
+
+    PDF drawing colors often differ slightly between legend swatches and bars,
+    so exact tuple equality can miss valid matches.
+    """
+    if color in direct_map:
+        return direct_map[color]
+    if not direct_map:
+        return None
+
+    best_color = min(direct_map.keys(), key=lambda k: color_distance(color, k))
+    if color_distance(color, best_color) <= max_dist:
+        return direct_map[best_color]
+    return None
+
 def parse_country_and_table(page_text: str) -> tuple[str | None, list[float] | None]:
     lines = [normalize_line(ln) for ln in (page_text or "").splitlines()]
     lines = [ln for ln in lines if ln and not is_merge_marker_line(ln)]
@@ -373,7 +403,7 @@ def mapping_cost_vs_table(
 
     est = {cat: 0.0 for cat in CATEGORIES}
     for color, value in year_color_values.items():
-        cat = mapping.get(color)
+        cat = resolve_category_by_color(color, mapping)
         if cat:
             est[cat] += value
 
@@ -454,7 +484,7 @@ def extract_page_timeseries(page: dict) -> list[dict[str, str]]:
     for year in years:
         sums = {cat: 0.0 for cat in CATEGORIES}
         for col, value in by_year_color[year].items():
-            cat = color_to_category.get(col)
+            cat = resolve_category_by_color(col, color_to_category)
             if cat:
                 sums[cat] += value
 

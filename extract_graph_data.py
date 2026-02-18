@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+<<<<<<< codex/extract-data-from-graphs-in-pdf-pvdyhs
 from __future__ import annotations
 
 """Extract year/value data from graph-heavy PDFs.
@@ -7,16 +8,33 @@ Default mode:
 - Automatically extract all countries/elements in 2025-2050.
 - Uses both text parsing and (when possible) bar-height estimation from PDF shapes.
 """
+=======
+"""Extract year/value data rows from graph-heavy PDFs.
+
+Default mode:
+  - Extract candidate lines containing a year + numeric values.
+
+Country/series mode:
+  - Filter to pages mentioning a country name.
+  - Parse year rows and map numeric columns to user-provided series names.
+  - Export a tidy CSV (year x series values).
+"""
+from __future__ import annotations
+>>>>>>> main
 
 import argparse
 import csv
 import re
 import sys
+<<<<<<< codex/extract-data-from-graphs-in-pdf-pvdyhs
 from collections import defaultdict
+=======
+>>>>>>> main
 from pathlib import Path
 
 YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2}|21\d{2})\b")
 VALUE_RE = re.compile(r"[-+]?\d{1,3}(?:,\d{3})*(?:\.\d+)?%?")
+<<<<<<< codex/extract-data-from-graphs-in-pdf-pvdyhs
 COUNTRY_CANDIDATE_RE = re.compile(r"^[A-Z][A-Za-z .\-']{2,}$")
 
 COUNTRY_STOPWORDS = {
@@ -30,6 +48,8 @@ COUNTRY_STOPWORDS = {
     "figure",
     "mwe",
 }
+=======
+>>>>>>> main
 
 
 def normalize_line(line: str) -> str:
@@ -45,6 +65,7 @@ def parse_numeric(token: str) -> float | None:
 
 
 def parse_year_value_row(line: str) -> tuple[int, list[float]] | None:
+<<<<<<< codex/extract-data-from-graphs-in-pdf-pvdyhs
     year_match = YEAR_RE.search(line)
     if not year_match:
         return None
@@ -275,6 +296,85 @@ def extract_all_countries_elements(pages: list[dict], year_min: int, year_max: i
                 }
             )
 
+=======
+    """Parse a text line that contains one year followed by numeric values."""
+    year_match = YEAR_RE.search(line)
+    if not year_match:
+        return None
+
+    year = int(year_match.group(1))
+    tail = line[year_match.end():]
+    tokens = VALUE_RE.findall(tail)
+
+    values: list[float] = []
+    for token in tokens:
+        parsed = parse_numeric(token)
+        if parsed is not None:
+            values.append(parsed)
+
+    if not values:
+        return None
+
+    return year, values
+
+
+def load_pdf_lines(pdf_path: Path) -> list[dict[str, str]]:
+    extractor_name = ""
+    try:
+        import pdfplumber
+
+        extractor_name = "pdfplumber"
+    except ModuleNotFoundError as exc:
+        try:
+            from pypdf import PdfReader
+
+            extractor_name = "pypdf"
+        except ModuleNotFoundError:
+            raise SystemExit(
+                "Missing dependencies: install one of the following in the same Python interpreter\n"
+                "- pip install pdfplumber\n"
+                "- pip install pypdf\n\n"
+                f"Current interpreter: {sys.executable}\n"
+                "Tip (Windows): use `py -m pip install pdfplumber` and run with `py extract_graph_data.py ...`"
+            ) from exc
+
+    lines: list[dict[str, str]] = []
+    if extractor_name == "pdfplumber":
+        with pdfplumber.open(pdf_path) as pdf:
+            for page_index, page in enumerate(pdf.pages, start=1):
+                text = page.extract_text() or ""
+                for raw_line in text.splitlines():
+                    normalized = normalize_line(raw_line)
+                    if normalized:
+                        lines.append({"page": str(page_index), "line": normalized})
+    else:
+        reader = PdfReader(str(pdf_path))
+        for page_index, page in enumerate(reader.pages, start=1):
+            text = page.extract_text() or ""
+            for raw_line in text.splitlines():
+                normalized = normalize_line(raw_line)
+                if normalized:
+                    lines.append({"page": str(page_index), "line": normalized})
+
+    return lines
+
+
+def extract_candidate_rows(pdf_path: Path) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for entry in load_pdf_lines(pdf_path):
+        parsed = parse_year_value_row(entry["line"])
+        if not parsed:
+            continue
+        year, values = parsed
+        rows.append(
+            {
+                "page": entry["page"],
+                "year": str(year),
+                "values": " | ".join(str(v).rstrip("0").rstrip(".") for v in values),
+                "line": entry["line"],
+            }
+        )
+>>>>>>> main
     return rows
 
 
@@ -285,10 +385,18 @@ def build_country_series_table(
     year_min: int,
     year_max: int,
 ) -> list[dict[str, str]]:
+<<<<<<< codex/extract-data-from-graphs-in-pdf-pvdyhs
+=======
+    """Build a wide table where each row is one year and each column is a series."""
+>>>>>>> main
     country_lower = country.lower()
     candidate_pages = {
         entry["page"] for entry in lines if country_lower in entry["line"].lower()
     }
+<<<<<<< codex/extract-data-from-graphs-in-pdf-pvdyhs
+=======
+
+>>>>>>> main
     filtered_lines = [entry for entry in lines if entry["page"] in candidate_pages]
 
     by_year: dict[int, list[float]] = {}
@@ -304,11 +412,22 @@ def build_country_series_table(
 
     table: list[dict[str, str]] = []
     for year in sorted(by_year):
+<<<<<<< codex/extract-data-from-graphs-in-pdf-pvdyhs
         row: dict[str, str] = {"country": country, "year": str(year)}
         values = by_year[year]
         for idx, series_name in enumerate(series):
             row[series_name] = str(values[idx]).rstrip("0").rstrip(".") if idx < len(values) else ""
         table.append(row)
+=======
+        values = by_year[year]
+        row: dict[str, str] = {"country": country, "year": str(year)}
+        for idx, series_name in enumerate(series):
+            row[series_name] = ""
+            if idx < len(values):
+                row[series_name] = str(values[idx]).rstrip("0").rstrip(".")
+        table.append(row)
+
+>>>>>>> main
     return table
 
 
@@ -321,6 +440,7 @@ def write_csv(path: Path, rows: list[dict[str, str]], fieldnames: list[str]) -> 
 
 
 def main() -> None:
+<<<<<<< codex/extract-data-from-graphs-in-pdf-pvdyhs
     parser = argparse.ArgumentParser(description="Extract year/value data from graph-based PDF reports.")
     parser.add_argument("pdf", type=Path, help="Input PDF path")
     parser.add_argument("-o", "--output", type=Path, default=Path("extracted_all_countries_long.csv"))
@@ -328,17 +448,67 @@ def main() -> None:
     parser.add_argument("-s", "--series", "-series", dest="series")
     parser.add_argument("-y", "--year-min", "-year-min", dest="year_min", type=int, default=2025)
     parser.add_argument("-Y", "--year-max", "-year-max", dest="year_max", type=int, default=2050)
+=======
+    parser = argparse.ArgumentParser(
+        description="Extract year/value candidate rows from graph-based PDF reports."
+    )
+    parser.add_argument("pdf", type=Path, help="Input PDF path")
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=Path("extracted_graph_rows.csv"),
+        help="Output CSV path (default: extracted_graph_rows.csv)",
+    )
+    parser.add_argument(
+        "-c",
+        "--country",
+        "-country",
+        dest="country",
+        help="Country name filter (e.g., Argentina)",
+    )
+    parser.add_argument(
+        "-s",
+        "--series",
+        "-series",
+        dest="series",
+        help="Comma-separated series names in chart order (e.g., '60 year operation,80 year operation,Government target')",
+    )
+    parser.add_argument(
+        "-y",
+        "--year-min",
+        "-year-min",
+        dest="year_min",
+        type=int,
+        default=2025,
+        help="Minimum year (default: 2025)",
+    )
+    parser.add_argument(
+        "-Y",
+        "--year-max",
+        "-year-max",
+        dest="year_max",
+        type=int,
+        default=2050,
+        help="Maximum year (default: 2050)",
+    )
+
+>>>>>>> main
     args = parser.parse_args()
 
     if not args.pdf.exists():
         raise SystemExit(f"PDF not found: {args.pdf}")
 
+<<<<<<< codex/extract-data-from-graphs-in-pdf-pvdyhs
     lines, pages = load_pdf_content(args.pdf)
 
+=======
+>>>>>>> main
     if args.country and args.series:
         series = [s.strip() for s in args.series.split(",") if s.strip()]
         if not series:
             raise SystemExit("No valid series names were provided in --series")
+<<<<<<< codex/extract-data-from-graphs-in-pdf-pvdyhs
         table_rows = build_country_series_table(lines, args.country, series, args.year_min, args.year_max)
         write_csv(args.output, table_rows, ["country", "year", *series])
         print(f"Extracted {len(table_rows)} rows for {args.country} ({args.year_min}-{args.year_max}) -> {args.output}")
@@ -349,6 +519,31 @@ def main() -> None:
     rows = extract_all_countries_elements(pages, args.year_min, args.year_max)
     write_csv(args.output, rows, ["country", "page", "year", "element", "value", "unit", "source", "line"])
     print(f"Auto extracted {len(rows)} element rows ({args.year_min}-{args.year_max}) -> {args.output}")
+=======
+
+        lines = load_pdf_lines(args.pdf)
+        table_rows = build_country_series_table(
+            lines=lines,
+            country=args.country,
+            series=series,
+            year_min=args.year_min,
+            year_max=args.year_max,
+        )
+
+        fieldnames = ["country", "year", *series]
+        write_csv(args.output, table_rows, fieldnames)
+        print(
+            f"Extracted {len(table_rows)} rows for {args.country} ({args.year_min}-{args.year_max}) -> {args.output}"
+        )
+        return
+
+    if args.country or args.series:
+        raise SystemExit("Use --country and --series together, or neither.")
+
+    rows = extract_candidate_rows(args.pdf)
+    write_csv(args.output, rows, ["page", "year", "values", "line"])
+    print(f"Extracted {len(rows)} candidate rows -> {args.output}")
+>>>>>>> main
 
 
 if __name__ == "__main__":

@@ -290,25 +290,48 @@ def parse_legend_color_map(words: list[dict], rects: list[dict]) -> dict[tuple[f
             for w in words
             if 330 <= float(w.get("top", 0.0)) <= 600 and str(w.get("text", "")).strip()
         ]
-        legend_words.sort(key=lambda w: (round(float(w.get("top", 0.0)) / 8.0), float(w.get("x0", 0.0))))
+        if not legend_words:
+            return None
+
+        # group words into row bands to tolerate slight y jitter / wrapping
+        rows: dict[int, list[dict]] = defaultdict(list)
+        for w in legend_words:
+            band = int(round(float(w.get("top", 0.0)) / 8.0))
+            rows[band].append(w)
 
         best_hits: list[dict] | None = None
-        for i in range(len(legend_words)):
-            hits = [legend_words[i]]
-            seen_toks = _tokenize(str(legend_words[i].get("text", "")))
-            j = i + 1
-            while j < len(legend_words) and len(seen_toks) < len(cat_toks):
-                if abs(float(legend_words[j].get("top", 0.0)) - float(hits[-1].get("top", 0.0))) > 12:
-                    break
-                hits.append(legend_words[j])
-                seen_toks.extend(_tokenize(str(legend_words[j].get("text", ""))))
-                j += 1
+        best_score = 0
 
-            if seen_toks[: len(cat_toks)] == cat_toks:
-                best_hits = hits[: max(1, len(cat_toks))]
-                break
+        for band in sorted(rows):
+            row_words = sorted(rows[band], key=lambda w: float(w.get("x0", 0.0)))
+            row_tokens: list[str] = []
+            for w in row_words:
+                row_tokens.extend(_tokenize(str(w.get("text", ""))))
 
-        if not best_hits:
+            # exact contiguous match first
+            for i in range(max(1, len(row_tokens) - len(cat_toks) + 1)):
+                if row_tokens[i : i + len(cat_toks)] == cat_toks:
+                    candidate = [
+                        w for w in row_words if any(t in cat_toks for t in _tokenize(str(w.get("text", ""))) )
+                    ]
+                    if candidate:
+                        return (
+                            min(float(h["x0"]) for h in candidate),
+                            min(float(h["top"]) for h in candidate),
+                            max(float(h["x1"]) for h in candidate),
+                            max(float(h["bottom"]) for h in candidate),
+                        )
+
+            # fallback: token-overlap score (handles OCR token splits/reordering)
+            overlap = sum(1 for t in cat_toks if t in row_tokens)
+            has_anchor = cat_toks[0] in row_tokens
+            if has_anchor and overlap > best_score:
+                best_score = overlap
+                best_hits = [
+                    w for w in row_words if any(t in cat_toks for t in _tokenize(str(w.get("text", ""))) )
+                ]
+
+        if not best_hits or best_score < max(1, len(cat_toks) - 1):
             return None
 
         return (

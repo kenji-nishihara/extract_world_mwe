@@ -8,6 +8,7 @@ from extract_graph_data import (
     is_merge_marker_line,
     mapping_cost_vs_table,
     parse_country_and_table,
+    extract_y_ticks,
 )
 
 
@@ -33,6 +34,22 @@ class ExtractGraphDataTests(unittest.TestCase):
         color_values = {(1.0, 0.0, 0.0): 100.0}
         table = [100.0, 0, 0, 0, 0, 0, 0, 100.0]
         self.assertEqual(mapping_cost_vs_table(mapping, color_values, table), 0.0)
+
+
+    def test_extract_y_ticks_ignores_noise_numbers(self):
+        words = [
+            {"text": "0", "x0": 20, "x1": 30, "top": 360, "bottom": 370},
+            {"text": "500", "x0": 20, "x1": 35, "top": 320, "bottom": 330},
+            {"text": "1000", "x0": 20, "x1": 40, "top": 280, "bottom": 290},
+            {"text": "1500", "x0": 20, "x1": 40, "top": 240, "bottom": 250},
+            {"text": "2000", "x0": 20, "x1": 40, "top": 200, "bottom": 210},
+            # noise near left area but different column
+            {"text": "1235", "x0": 90, "x1": 110, "top": 260, "bottom": 270},
+        ]
+        ymap = extract_y_ticks(words)
+        self.assertIsNotNone(ymap)
+        # top around y=220 should be about 1750MWe with this axis spacing
+        self.assertAlmostEqual(ymap.f(220), 1750, delta=90)
 
     def test_extract_page_timeseries_with_legend(self):
         page = {

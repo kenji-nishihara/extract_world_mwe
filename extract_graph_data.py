@@ -108,11 +108,69 @@ def fit_linear_y_to_value(points: list[tuple[float, float]]) -> LinMap | None:
 
 
 def extract_y_ticks(words: list[dict]) -> LinMap | None:
+<<<<<<< codex/extract-data-from-graphs-in-pdf-56a5ay
+    """Extract a robust y->value map from axis ticks.
+
+    We prioritize left-side, round-number ticks and select the densest x-column
+    to avoid contaminating the fit with non-axis numbers.
+    """
+
+    candidates: list[tuple[float, float, float]] = []  # (x_mid, y_mid, value)
+=======
     ticks: list[tuple[float, float]] = []
+>>>>>>> main
     for w in words:
         txt = str(w.get("text", "")).strip()
         if not re.fullmatch(r"\d{1,4}(?:,\d{3})*", txt):
             continue
+<<<<<<< codex/extract-data-from-graphs-in-pdf-56a5ay
+
+        value = float(txt.replace(",", ""))
+        if value % 50 != 0:
+            continue
+
+        x0 = float(w.get("x0", 0.0))
+        x1 = float(w.get("x1", x0))
+        x_mid = 0.5 * (x0 + x1)
+        if x_mid >= 150:
+            continue
+
+        top = float(w.get("top", 0.0))
+        bottom = float(w.get("bottom", top))
+        if not (150 <= top <= 500):
+            continue
+        y_mid = 0.5 * (top + bottom)
+        candidates.append((x_mid, y_mid, value))
+
+    if len(candidates) < 2:
+        return None
+
+    # choose the densest x column (axis tick labels align vertically)
+    bins: dict[int, list[tuple[float, float]]] = defaultdict(list)
+    for x_mid, y_mid, value in candidates:
+        bins[int(round(x_mid / 12.0))].append((y_mid, value))
+    best_bin = max(bins, key=lambda b: len(bins[b]))
+    selected = bins[best_bin]
+
+    if len(selected) < 2:
+        selected = [(y, v) for _, y, v in candidates]
+
+    by_val: dict[float, list[float]] = defaultdict(list)
+    for y, v in selected:
+        by_val[v].append(y)
+    dedup = [(median(ys), v) for v, ys in by_val.items()]
+
+    # keep points that follow monotonic trend (higher value should be higher on chart)
+    dedup.sort(key=lambda t: t[0])
+    monotonic: list[tuple[float, float]] = []
+    for y, v in dedup:
+        if not monotonic or v <= monotonic[-1][1]:
+            monotonic.append((y, v))
+
+    if len(monotonic) >= 2:
+        dedup = monotonic
+
+=======
         if float(w.get("x0", 0.0)) >= 130:
             continue
         top = float(w.get("top", 0.0))
@@ -129,6 +187,7 @@ def extract_y_ticks(words: list[dict]) -> LinMap | None:
     for y, v in ticks:
         by_val[v].append(y)
     dedup = [(median(ys), v) for v, ys in by_val.items()]
+>>>>>>> main
     dedup.sort(key=lambda t: t[1])
     return fit_linear_y_to_value(dedup)
 

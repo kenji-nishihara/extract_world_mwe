@@ -28,6 +28,10 @@ COUNTRY_STOPWORDS = {
     "source",
     "figure",
     "mwe",
+    "long-term operation",
+    "proposed",
+    "existing",
+    "new build",
 }
 
 MERGE_MARKER_PREFIXES = ("<<<<<<<", "=======", ">>>>>>>")
@@ -62,6 +66,10 @@ def is_country_candidate(line: str) -> bool:
 
 
 def infer_country_for_lines(lines: list[str], fallback: str = "Unknown") -> str:
+    # Prefer early heading lines but skip generic chart labels.
+    for line in lines[:12]:
+        if is_country_candidate(line):
+            return line
     for line in lines:
         if is_country_candidate(line):
             return line
@@ -90,9 +98,10 @@ def estimate_bar_values_from_page(page_obj: dict, year_min: int, year_max: int) 
     year_words: list[tuple[int, float]] = []
     for word in words:
         txt = str(word.get("text", "")).strip()
-        if not YEAR_RE.fullmatch(txt):
+        match = YEAR_RE.search(txt)
+        if not match:
             continue
-        year = int(txt)
+        year = int(match.group(1))
         if year_min <= year <= year_max:
             x0 = float(word.get("x0", 0.0))
             x1 = float(word.get("x1", x0))
@@ -107,8 +116,6 @@ def estimate_bar_values_from_page(page_obj: dict, year_min: int, year_max: int) 
         txt = str(word.get("text", "")).strip().replace(",", "")
         val = parse_numeric(txt)
         if val is None:
-            continue
-        if 1900 <= val <= 2100:
             continue
         x0 = float(word.get("x0", 0.0))
         x1 = float(word.get("x1", x0))
@@ -133,6 +140,10 @@ def estimate_bar_values_from_page(page_obj: dict, year_min: int, year_max: int) 
         ratio = (y - y_low) / (y_high - y_low)
         return v_low + ratio * (v_high - v_low)
 
+    tick_ys = [y for y, _ in ticks]
+    y_tick_top = min(tick_ys)
+    y_tick_bottom = max(tick_ys)
+
     bars: list[tuple[float, float]] = []
     for rect in rects:
         x0 = float(rect.get("x0", 0.0))
@@ -143,20 +154,31 @@ def estimate_bar_values_from_page(page_obj: dict, year_min: int, year_max: int) 
         height = abs(y_bottom - y_top)
         if width < 1.0 or height < 4.0:
             continue
+
+        # Keep bars within plot area and aligned to the bottom axis region.
+        bottom_y = max(y_top, y_bottom)
+        top_y = min(y_top, y_bottom)
+        if bottom_y < y_tick_bottom - 40 or bottom_y > y_tick_bottom + 40:
+            continue
+        if top_y < y_tick_top - 10 or top_y > y_tick_bottom:
+            continue
+
         xc = (x0 + x1) / 2
         if xc < min_year_x - 5:
             continue
-        bars.append((xc, min(y_top, y_bottom)))
+        bars.append((xc, top_y))
 
     if not bars:
         return []
 
+    years_with_x = sorted(year_words, key=lambda t: t[1])
     grouped: dict[int, list[tuple[float, float]]] = defaultdict(list)
-    for year, x_year in year_words:
-        near = [(xc, y_top) for (xc, y_top) in bars if abs(xc - x_year) <= 30]
-        if near:
-            near.sort(key=lambda item: item[0])
-            grouped[year] = near
+    for xc, y_top in bars:
+        nearest_year, _ = min(years_with_x, key=lambda yx: abs(yx[1] - xc))
+        grouped[nearest_year].append((xc, y_top))
+
+    for year in grouped:
+        grouped[year].sort(key=lambda item: item[0])
 
     out: list[dict[str, str]] = []
     for year in sorted(grouped):

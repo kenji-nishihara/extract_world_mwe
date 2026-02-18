@@ -7,6 +7,10 @@
 - `--country --series --year-min --year-max` を入力しなくても、**全ページを自動抽出**。
 - 数値は**テキストからは抽出せず**、`pdfplumber` で取得した棒グラフ矩形の高さ (`bar_height`) のみを使用。
 - グラフの縦軸目盛り（Y軸数値）を読み取り、`bar_height` を **MWe に換算**。
+<<<<<<< codex/extract-data-from-graphs-in-pdf-7ke6or
+- 年ラベルと棒のX座標は「最も近い年」に自動対応付けし、ラベル間隔が広いページでも取りこぼしを減らします。
+=======
+>>>>>>> main
 - 出力の `source` は `bar_height` 固定。
 
 ## 実行

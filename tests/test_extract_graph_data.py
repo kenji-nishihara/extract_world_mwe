@@ -4,6 +4,7 @@ from extract_graph_data import (
     build_country_series_table,
     estimate_bar_values_from_page,
     extract_all_countries_elements,
+    infer_country_for_lines,
     is_merge_marker_line,
 )
 
@@ -78,6 +79,28 @@ class ExtractGraphDataTests(unittest.TestCase):
         self.assertEqual(table[0]["60 year operation"], "11")
         self.assertEqual(table[0]["80 year operation"], "22")
         self.assertEqual(table[0]["Government target"], "")
+
+
+    def test_infer_country_skips_generic_heading(self):
+        lines = ["Long-term operation", "Argentina", "Reference case"]
+        self.assertEqual(infer_country_for_lines(lines), "Argentina")
+
+    def test_assign_bar_to_nearest_year_without_strict_threshold(self):
+        page = {
+            "words": [
+                {"text": "0", "x0": 10, "x1": 20, "top": 100, "bottom": 110},
+                {"text": "2000", "x0": 10, "x1": 30, "top": 0, "bottom": 10},
+                {"text": "2025", "x0": 90, "x1": 110, "top": 120, "bottom": 130},
+                {"text": "2030", "x0": 150, "x1": 170, "top": 120, "bottom": 130},
+            ],
+            "rects": [
+                # slightly far from 2025 label but nearest year should still be 2025
+                {"x0": 120, "x1": 130, "top": 20, "bottom": 100},
+            ],
+        }
+        rows = estimate_bar_values_from_page(page, 2025, 2050)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["year"], "2025")
 
     def test_merge_marker_lines_are_ignored(self):
         self.assertTrue(is_merge_marker_line(">>>>>>> main"))

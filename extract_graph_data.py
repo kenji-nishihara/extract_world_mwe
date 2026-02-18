@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import csv
 import re
+import sys
 from pathlib import Path
 
 YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2}|21\d{2})\b")
@@ -21,14 +22,54 @@ def normalize_line(line: str) -> str:
 
 
 def extract_rows(pdf_path: Path) -> list[dict[str, str]]:
+    extractor_name = ""
     try:
         import pdfplumber
+        extractor_name = "pdfplumber"
     except ModuleNotFoundError as exc:
-        raise SystemExit("Missing dependency: pdfplumber. Install with: pip install pdfplumber") from exc
+        try:
+            from pypdf import PdfReader
+            extractor_name = "pypdf"
+        except ModuleNotFoundError:
+            raise SystemExit(
+                "Missing dependencies: install one of the following in the same Python interpreter\n"
+                "- pip install pdfplumber\n"
+                "- pip install pypdf\n\n"
+                f"Current interpreter: {sys.executable}\n"
+                "Tip (Windows): use `py -m pip install pdfplumber` and run with `py extract_graph_data.py ...`"
+            ) from exc
 
     rows: list[dict[str, str]] = []
-    with pdfplumber.open(pdf_path) as pdf:
-        for page_index, page in enumerate(pdf.pages, start=1):
+    if extractor_name == "pdfplumber":
+        with pdfplumber.open(pdf_path) as pdf:
+            for page_index, page in enumerate(pdf.pages, start=1):
+                text = page.extract_text() or ""
+                for raw_line in text.splitlines():
+                    line = normalize_line(raw_line)
+                    if not line:
+                        continue
+
+                    year_match = YEAR_RE.search(line)
+                    if not year_match:
+                        continue
+
+                    values = VALUE_RE.findall(line)
+                    # Exclude trivial cases where only the year exists.
+                    filtered = [v for v in values if v != year_match.group(1)]
+                    if not filtered:
+                        continue
+
+                    rows.append(
+                        {
+                            "page": str(page_index),
+                            "year": year_match.group(1),
+                            "line": line,
+                            "values": " | ".join(filtered),
+                        }
+                    )
+    else:
+        reader = PdfReader(str(pdf_path))
+        for page_index, page in enumerate(reader.pages, start=1):
             text = page.extract_text() or ""
             for raw_line in text.splitlines():
                 line = normalize_line(raw_line)
@@ -40,7 +81,6 @@ def extract_rows(pdf_path: Path) -> list[dict[str, str]]:
                     continue
 
                 values = VALUE_RE.findall(line)
-                # Exclude trivial cases where only the year exists.
                 filtered = [v for v in values if v != year_match.group(1)]
                 if not filtered:
                     continue

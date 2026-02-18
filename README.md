@@ -27,3 +27,20 @@ python3 extract_graph_data.py World-Nuclear-Outlook-Report_dfed5656_country.pdf 
 ```bash
 pip install pdfplumber
 ```
+
+`pdfplumber` が使えない場合は `pypdf` に自動フォールバックします。
+
+```bash
+pip install pypdf
+```
+
+## Windowsで「インストール済みなのに見つからない」場合
+
+Python実行環境が複数あると、`pip` と `python3` が別環境を指すことがあります。
+
+```powershell
+py -m pip install pdfplumber
+py extract_graph_data.py World-Nuclear-Outlook-Report_dfed5656_country.pdf -o output.csv
+```
+
+スクリプトはエラー時に「現在使っているPython実行ファイルのパス」も表示します。

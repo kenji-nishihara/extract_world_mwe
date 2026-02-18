@@ -58,3 +58,25 @@ python3 extract_graph_data.py World-Nuclear-Outlook-Report_dfed5656_country.pdf 
 ```bash
 pip install pdfplumber
 ```
+
+## トラブルシュート
+
+### `SyntaxError` で `<<<<<<<` が出る場合
+
+`extract_graph_data.py` に **マージ競合マーカー**（`<<<<<<<`, `=======`, `>>>>>>>`）が混入しています。
+
+1. 競合マーカー有無を確認
+
+```bash
+rg -n "^(<<<<<<<|=======|>>>>>>>)" extract_graph_data.py
+```
+
+2. 競合マーカーが出る場合は、その行を削除して正しいコードだけ残す
+   - もし修正が難しければ、このリポジトリの最新 `extract_graph_data.py` を上書きしてください。
+
+3. 再確認
+
+```bash
+python3 extract_graph_data.py --help
+```
+

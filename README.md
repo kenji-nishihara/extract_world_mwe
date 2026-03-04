@@ -88,3 +88,19 @@ python3 extract_graph_data.py World-Nuclear-Outlook-Report_dfed5656_country.pdf 
 ```
 
 抽出後に `totals_by_category` を表示し、`60-year operation` / `80-year operation` が0のままかを確認できます。
+
+## 追加: 燃料組成のランダム生成
+
+条件を満たす核種組成を、ディリクレ分布（一様、`alpha=1`）+ 棄却サンプリングで生成できます。
+
+```bash
+python3 fuel_composition_generator.py
+```
+
+複数件生成:
+
+```bash
+python3 fuel_composition_generator.py -n 5 --seed 42
+```
+
+出力はJSONで、`nuclides`（各核種比率）と `derived`（`pu_total`, `fissile`, `sum`）を含みます。
